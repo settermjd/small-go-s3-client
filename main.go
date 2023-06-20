@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"time"
@@ -12,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/joho/godotenv"
 )
 
@@ -22,6 +26,7 @@ type s3Data struct {
 
 type App struct {
 	s3Client *s3.S3
+	session *session.Session
 }
 
 func newApp() App {
@@ -29,13 +34,23 @@ func newApp() App {
 		SharedConfigState: session.SharedConfigEnable,
 	}))
 	
-	return App{s3Client: s3.New(sess)} 
+	return App{s3Client: s3.New(sess), session: sess} 
+}
+
+func uploadFile(file multipart.File) ([]byte, error) {
+	buf := bytes.NewBuffer(nil)
+	if _, err := io.Copy(buf, file); err != nil {
+		return nil, fmt.Errorf("could not upload file. %v", err)
+	}
+
+	return buf.Bytes(), nil
 }
 
 // listFilesInBucket retrieves and returns all of the files in an S3(-compatible) Bucket
 func (app *App)  listFilesInBucket(writer http.ResponseWriter, request *http.Request) {
 	request.ParseForm()
 	var bucket string = request.FormValue("bucket")
+
 	duration, exists := os.LookupEnv("DURATION")
 	if !exists {
 		writer.WriteHeader(400)
@@ -79,6 +94,44 @@ func (app *App)  listFilesInBucket(writer http.ResponseWriter, request *http.Req
 	fmt.Printf("successfully retrieved files from bucket: %s.\n", bucket)
 }
 
+func (app *App) uploadFileToBucket(writer http.ResponseWriter, request *http.Request) {
+	request.ParseForm()
+
+	// Create an uploader with the session and default options
+	uploader := s3manager.NewUploader(app.session)
+
+	file, fileMetadata, err := request.FormFile("file")
+	if err != nil {
+		writer.WriteHeader(400)
+		writer.Write([]byte(fmt.Sprintf("could not get file data from request: %v", err)))
+		return
+	}
+
+	fileData, err := uploadFile(file)
+	if err != nil {
+		writer.WriteHeader(400)
+		writer.Write([]byte(fmt.Sprintf("could not upload file: %v", err)))
+		return
+	}
+
+	var bucket string = request.FormValue("bucket")
+
+	// Upload the file to S3.
+	result, err := uploader.Upload(&s3manager.UploadInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(fileMetadata.Filename),
+		Body:   bytes.NewBuffer(fileData),
+	})
+	if err != nil {
+		writer.WriteHeader(400)
+		writer.Write([]byte(fmt.Sprintf("failed to upload file to S3 bucket: %v", err)))
+		return
+	}
+
+	fmt.Printf("file uploaded to, %s\n", aws.StringValue(&result.Location))
+	writer.Write([]byte(fmt.Sprintf("file uploaded to S3 bucket: %s", aws.StringValue(&result.Location))))
+}
+
 func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Print("No .env file found")
@@ -90,7 +143,7 @@ func main() {
 	http.HandleFunc("/", app.listFilesInBucket)
 
 	// Upload a file to the bucket
-	//http.HandleFunc("/upload", uploadFileToBucket)
+	http.HandleFunc("/upload", app.uploadFileToBucket)
 
 	// Download a file from the bucket
 	//http.HandleFunc("/download", downloadFileFromBucket)
