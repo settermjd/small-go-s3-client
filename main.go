@@ -6,13 +6,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"os"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
@@ -132,6 +135,65 @@ func (app *App) uploadFileToBucket(writer http.ResponseWriter, request *http.Req
 	writer.Write([]byte(fmt.Sprintf("file uploaded to S3 bucket: %s", aws.StringValue(&result.Location))))
 }
 
+func (app *App) downloadFileFromBucket(writer http.ResponseWriter, request *http.Request) {
+	request.ParseForm()
+
+	var (
+		bucket = request.FormValue("bucket")
+		downloadFile = request.FormValue("downloadFile")
+		file = request.FormValue("file")
+	)
+
+	fmt.Printf("Attempting to download %s from bucket: %s\n", file, bucket)
+	result, err := app.s3Client.HeadObject(&s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key: aws.String(file),
+	})
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok {
+			switch aerr.Code() {
+			default:
+				fmt.Println(aerr.Error())
+			}
+		} else {
+			fmt.Println(err.Error())
+		}
+		return
+	}
+	fmt.Printf("File size is %d.\n", *result.ContentLength)
+
+	buf := make([]byte, *result.ContentLength)
+	// Create an uploader with the session and default options
+	downloader := s3manager.NewDownloader(app.session)
+	input := &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key: aws.String(file),
+	}
+	objectSize, err := downloader.Download(aws.NewWriteAtBuffer(buf), input)
+	if err != nil {
+		fmt.Printf("Could not download file. Reason: %v.\n", err)
+	}
+	fmt.Printf("Downloaded file. Size: %d\n", objectSize)
+
+	if (downloadFile == "yes") {
+		var fileMode fs.FileMode = 0755
+		err = os.WriteFile(file, buf, fileMode)
+		if err != nil {
+			fmt.Printf("Could not write file to %s\n. Reason: %s", file, err)
+		} else {
+			fmt.Printf("Wrote file to %s\n", file)
+		}
+
+		return
+	}
+
+	cd := mime.FormatMediaType("attachment", map[string]string{"filename": file})
+	writer.Header().Set("Content-Disposition", cd)
+	writer.Header().Set("Content-Type", http.DetectContentType(buf))
+	io.Copy(writer, bytes.NewBuffer(buf))
+	fmt.Println("Downloaded file.")
+}
+
 func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Print("No .env file found")
@@ -146,7 +208,7 @@ func main() {
 	http.HandleFunc("/upload", app.uploadFileToBucket)
 
 	// Download a file from the bucket
-	//http.HandleFunc("/download", downloadFileFromBucket)
+	http.HandleFunc("/download", app.downloadFileFromBucket)
 
 	http.ListenAndServe(":8080", nil)
 }
