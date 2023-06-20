@@ -27,6 +27,11 @@ type s3Data struct {
 	Size int64
 }
 
+func writeErrorResponse(writer http.ResponseWriter, errorMessage string, status int) {
+	writer.WriteHeader(400)
+	writer.Write([]byte(errorMessage))
+}
+
 type App struct {
 	s3Client *s3.S3
 	session *session.Session
@@ -105,15 +110,13 @@ func (app *App) uploadFileToBucket(writer http.ResponseWriter, request *http.Req
 
 	file, fileMetadata, err := request.FormFile("file")
 	if err != nil {
-		writer.WriteHeader(400)
-		writer.Write([]byte(fmt.Sprintf("could not get file data from request: %v", err)))
+		writeErrorResponse(writer, fmt.Sprintf("could not get file data from request: %v", err), 400)
 		return
 	}
 
 	fileData, err := uploadFile(file)
 	if err != nil {
-		writer.WriteHeader(400)
-		writer.Write([]byte(fmt.Sprintf("could not upload file: %v", err)))
+		writeErrorResponse(writer, fmt.Sprintf("could not upload file: %v", err), 400)
 		return
 	}
 
@@ -126,8 +129,7 @@ func (app *App) uploadFileToBucket(writer http.ResponseWriter, request *http.Req
 		Body:   bytes.NewBuffer(fileData),
 	})
 	if err != nil {
-		writer.WriteHeader(400)
-		writer.Write([]byte(fmt.Sprintf("failed to upload file to S3 bucket: %v", err)))
+		writeErrorResponse(writer, fmt.Sprintf("failed to upload file to S3 bucket: %v", err), 400)
 		return
 	}
 
@@ -171,7 +173,9 @@ func (app *App) downloadFileFromBucket(writer http.ResponseWriter, request *http
 	}
 	objectSize, err := downloader.Download(aws.NewWriteAtBuffer(buf), input)
 	if err != nil {
+		writeErrorResponse(writer, fmt.Sprintf("Could not download file. Reason: %v.\n", err), 400)
 		fmt.Printf("Could not download file. Reason: %v.\n", err)
+		return
 	}
 	fmt.Printf("Downloaded file. Size: %d\n", objectSize)
 
@@ -179,8 +183,10 @@ func (app *App) downloadFileFromBucket(writer http.ResponseWriter, request *http
 		var fileMode fs.FileMode = 0755
 		err = os.WriteFile(file, buf, fileMode)
 		if err != nil {
+			writeErrorResponse(writer, fmt.Sprintf("Could not download file. Reason: %v.\n", err), 400)
 			fmt.Printf("Could not write file to %s\n. Reason: %s", file, err)
 		} else {
+			writeErrorResponse(writer, fmt.Sprintf("Could not download file. Reason: %v.\n", err), 400)
 			fmt.Printf("Wrote file to %s\n", file)
 		}
 
