@@ -20,20 +20,22 @@ type s3Data struct {
 	Size int64
 }
 
-// listFilesInBucket retrieves and returns all of the files in an S3(-compatible) Bucket
-func listFilesInBucket(writer http.ResponseWriter, request *http.Request) {
+type App struct {
+	s3Client *s3.S3
+}
+
+func newApp() App {
 	sess := session.Must(session.NewSessionWithOptions(session.Options{
 		SharedConfigState: session.SharedConfigEnable,
 	}))
-	s3Client := s3.New(sess)
+	
+	return App{s3Client: s3.New(sess)} 
+}
 
-	ctx := context.Background()
-	var cancelFn func()
-
+// listFilesInBucket retrieves and returns all of the files in an S3(-compatible) Bucket
+func (app *App)  listFilesInBucket(writer http.ResponseWriter, request *http.Request) {
 	request.ParseForm()
-
 	var bucket string = request.FormValue("bucket")
-
 	duration, exists := os.LookupEnv("DURATION")
 	if !exists {
 		writer.WriteHeader(400)
@@ -47,6 +49,8 @@ func listFilesInBucket(writer http.ResponseWriter, request *http.Request) {
 		writer.Write([]byte(fmt.Sprintf("could not parse provided duration, %v", err)))
 		return
 	}
+	ctx := context.Background()
+	var cancelFn func()
 	if timeout > 0 {
 		ctx, cancelFn = context.WithTimeout(ctx, timeout)
 	}
@@ -55,7 +59,7 @@ func listFilesInBucket(writer http.ResponseWriter, request *http.Request) {
 	}
 
 	objects := []s3Data{}
-	err = s3Client.ListObjectsPagesWithContext(
+	err = app.s3Client.ListObjectsPagesWithContext(
 		ctx,
 		&s3.ListObjectsInput{Bucket: aws.String(bucket)},
 		func(p *s3.ListObjectsOutput, lastPage bool) bool {
@@ -80,8 +84,10 @@ func main() {
 		log.Print("No .env file found")
 	}
 
+	app := newApp()
+
 	// List files in the bucket
-	http.HandleFunc("/", listFilesInBucket)
+	http.HandleFunc("/", app.listFilesInBucket)
 
 	// Upload a file to the bucket
 	//http.HandleFunc("/upload", uploadFileToBucket)
