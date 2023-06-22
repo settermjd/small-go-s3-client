@@ -22,14 +22,14 @@ import (
 	"github.com/joho/godotenv"
 )
 
-type s3Data struct {
-	Key  string
-	Size int64
-}
-
 func writeErrorResponse(writer http.ResponseWriter, errorMessage string, status int) {
 	writer.WriteHeader(400)
 	writer.Write([]byte(errorMessage))
+}
+
+type s3Data struct {
+	Key  string
+	Size int64
 }
 
 type App struct {
